@@ -177,17 +177,17 @@ INSERT INTO `+tableBlocks+` (height, chain_id, created_at)
 func (es *EventSink) IndexTxEvents(txrs []*abci.TxResult) error {
 	ts := time.Now().UTC()
 
-	for _, txr := range txrs {
-		// Encode the result message in protobuf wire format for indexing.
-		resultData, err := proto.Marshal(txr)
-		if err != nil {
-			return fmt.Errorf("marshaling tx_result: %w", err)
-		}
+	if err := runInTransaction(es.store, func(dbtx *sql.Tx) error {
+		for _, txr := range txrs {
+			// Encode the result message in protobuf wire format for indexing.
+			resultData, err := proto.Marshal(txr)
+			if err != nil {
+				return fmt.Errorf("marshaling tx_result: %w", err)
+			}
 
-		// Index the hash of the underlying transaction as a hex string.
-		txHash := fmt.Sprintf("%X", types.Tx(txr.Tx).Hash())
+			// Index the hash of the underlying transaction as a hex string.
+			txHash := fmt.Sprintf("%X", types.Tx(txr.Tx).Hash())
 
-		if err := runInTransaction(es.store, func(dbtx *sql.Tx) error {
 			// Find the block associated with this transaction. The block header
 			// must have been indexed prior to the transactions belonging to it.
 			blockID, err := queryWithID(dbtx, `
@@ -221,11 +221,10 @@ INSERT INTO `+tableTxResults+` (block_id, index, created_at, tx_hash, tx_result)
 			if err := insertEvents(dbtx, blockID, txID, txr.Result.Events); err != nil {
 				return fmt.Errorf("indexing transaction events: %w", err)
 			}
-			return nil
-
-		}); err != nil {
-			return err
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	return nil
 }
