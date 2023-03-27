@@ -38,6 +38,8 @@ type EventSink struct {
 	c      chan event
 	wg     sync.WaitGroup
 	cancel func()
+
+	pendingTxResults []*abci.TxResult
 }
 
 type event struct {
@@ -333,9 +335,15 @@ func (es *EventSink) consumeEvents(evts ...event) {
 	for _, e := range evts {
 		switch {
 		case e.IsIndexBlock():
+			// on index block we push all tx + the block
+			if len(es.pendingTxResults) > 0 {
+				es.indexTxEvents(es.pendingTxResults)
+			}
+			es.pendingTxResults = es.pendingTxResults[:0]
 			es.indexBlockEvents(e.GetIndexBlock())
 		case e.IsIndexTx():
-			es.indexTxEvents(e.GetIndexTx())
+			// just aggregate here
+			es.pendingTxResults = append(es.pendingTxResults, e.GetIndexTx()...)
 		}
 	}
 }
