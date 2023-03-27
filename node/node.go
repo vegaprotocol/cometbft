@@ -292,7 +292,7 @@ func createAndStartIndexerService(
 		if config.TxIndex.PsqlConn == "" {
 			return nil, nil, nil, errors.New(`no psql-conn is set for the "psql" indexer`)
 		}
-		es, err := psql.NewEventSink(config.TxIndex.PsqlConn, chainID)
+		es, err := psql.NewEventSink(config.TxIndex.PsqlConn, chainID, logger.With("module", "psqlindexer"))
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("creating psql indexer: %w", err)
 		}

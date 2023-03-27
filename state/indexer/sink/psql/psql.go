@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
 
 	abci "github.com/tendermint/tendermint/abci/types"
+	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/libs/pubsub/query"
 	"github.com/tendermint/tendermint/types"
 )
@@ -30,21 +32,67 @@ const (
 type EventSink struct {
 	store   *sql.DB
 	chainID string
+	log     log.Logger
+
+	// exit the sink
+	c      chan event
+	wg     sync.WaitGroup
+	cancel func()
 }
+
+type event struct {
+	newBlockHeader *types.EventDataNewBlockHeader
+	txResults      []*abci.TxResult
+}
+
+func (e *event) IsIndexBlock() bool {
+	return e.newBlockHeader != nil
+}
+func (e *event) IsIndexTx() bool {
+	return e.txResults != nil
+}
+
+func (e *event) GetIndexBlock() types.EventDataNewBlockHeader {
+	return *e.newBlockHeader
+}
+
+func (e *event) GetIndexTx() []*abci.TxResult {
+	return e.txResults
+}
+
+type dummyLogger struct{}
+
+func (l *dummyLogger) Debug(msg string, keyvals ...interface{}) {}
+func (l *dummyLogger) Info(msg string, keyvals ...interface{})  {}
+func (l *dummyLogger) Error(msg string, keyvals ...interface{}) {}
+
+func (l *dummyLogger) With(keyvals ...interface{}) log.Logger { return l }
 
 // NewEventSink constructs an event sink associated with the PostgreSQL
 // database specified by connStr. Events written to the sink are attributed to
 // the specified chainID.
-func NewEventSink(connStr, chainID string) (*EventSink, error) {
+func NewEventSink(connStr, chainID string, logger ...log.Logger) (*EventSink, error) {
 	db, err := sql.Open(driverName, connStr)
 	if err != nil {
 		return nil, err
 	}
 
-	return &EventSink{
+	var log log.Logger = &dummyLogger{}
+	if len(logger) > 0 {
+		log = logger[0]
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	es := &EventSink{
 		store:   db,
 		chainID: chainID,
-	}, nil
+		log:     log,
+		cancel:  cancel,
+		c:       make(chan event, 10000),
+	}
+	go es.run(ctx)
+
+	return es, nil
 }
 
 // DB returns the underlying Postgres connection used by the sink.
@@ -140,9 +188,14 @@ func makeIndexedEvent(compositeKey, value string) abci.Event {
 // IndexBlockEvents indexes the specified block header, part of the
 // indexer.EventSink interface.
 func (es *EventSink) IndexBlockEvents(h types.EventDataNewBlockHeader) error {
+	es.c <- event{newBlockHeader: &h}
+	return nil
+}
+
+func (es *EventSink) indexBlockEvents(h types.EventDataNewBlockHeader) {
 	ts := time.Now().UTC()
 
-	return runInTransaction(es.store, func(dbtx *sql.Tx) error {
+	err := runInTransaction(es.store, func(dbtx *sql.Tx) error {
 		// Add the block to the blocks table and report back its row ID for use
 		// in indexing the events for the block.
 		blockID, err := queryWithID(dbtx, `
@@ -172,9 +225,17 @@ INSERT INTO `+tableBlocks+` (height, chain_id, created_at)
 		}
 		return nil
 	})
+	if err != nil {
+		es.log.Error("could not save block header", "err", err)
+	}
 }
 
 func (es *EventSink) IndexTxEvents(txrs []*abci.TxResult) error {
+	es.c <- event{txResults: txrs}
+	return nil
+}
+
+func (es *EventSink) indexTxEvents(txrs []*abci.TxResult) {
 	ts := time.Now().UTC()
 
 	if err := runInTransaction(es.store, func(dbtx *sql.Tx) error {
@@ -224,9 +285,9 @@ INSERT INTO `+tableTxResults+` (block_id, index, created_at, tx_hash, tx_result)
 		}
 		return nil
 	}); err != nil {
-		return err
+		es.log.Error("could not save tx resulti", "err", err)
 	}
-	return nil
+	return
 }
 
 // SearchBlockEvents is not implemented by this sink, and reports an error for all queries.
@@ -249,5 +310,45 @@ func (es *EventSink) HasBlock(h int64) (bool, error) {
 	return false, errors.New("hasBlock is not supported via the postgres event sink")
 }
 
+func (es *EventSink) run(ctx context.Context) {
+	for {
+		select {
+		case e := <-es.c:
+			es.consumeEvents(e)
+		case <-ctx.Done():
+			// here we pull all events, consume them
+			// and return
+			evts := []event{}
+			for e := range es.c {
+				evts = append(evts, e)
+			}
+			es.consumeEvents(evts...)
+			es.wg.Done()
+			return
+		}
+	}
+}
+
+func (es *EventSink) consumeEvents(evts ...event) {
+	for _, e := range evts {
+		switch {
+		case e.IsIndexBlock():
+			es.indexBlockEvents(e.GetIndexBlock())
+		case e.IsIndexTx():
+			es.indexTxEvents(e.GetIndexTx())
+		}
+	}
+}
+
 // Stop closes the underlying PostgreSQL database.
-func (es *EventSink) Stop() error { return es.store.Close() }
+func (es *EventSink) Stop() error {
+	// first close our channel
+	// so we'll stop sending blocks over it.
+	close(es.c)
+	// then add to the wait group annd wait for processing to be done.
+	es.wg.Add(1)
+	es.cancel()
+	es.wg.Wait()
+	// now delete the database
+	return es.store.Close()
+}
