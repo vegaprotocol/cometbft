@@ -227,11 +227,15 @@ func (g *Group) Buffered() int {
 // FlushAndSync writes any buffered data to the underlying file and commits the
 // current content of the file to stable storage (fsync).
 func (g *Group) FlushAndSync() error {
+	g.Logger.Debug("waitING for lock")
 	g.mtx.Lock()
 	defer g.mtx.Unlock()
+	g.Logger.Debug("waitED for lock")
 	err := g.headBuf.Flush()
+	g.Logger.Debug("flushED for lock")
 	if err == nil {
 		err = g.Head.Sync()
+		g.Logger.Debug("syncED")
 	}
 	return err
 }

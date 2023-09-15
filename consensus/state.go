@@ -2189,10 +2189,11 @@ func (cs *State) signVote(
 ) (*types.Vote, error) {
 	// Flush the WAL. Otherwise, we may not recompute the same vote to sign,
 	// and the privValidator will refuse to sign anything.
+	cs.Logger.Debug("flushING", "height", cs.Height, "round", cs.Round)
 	if err := cs.wal.FlushAndSync(); err != nil {
 		return nil, err
 	}
-
+	cs.Logger.Debug("flushED", "height", cs.Height, "round", cs.Round)
 	if cs.privValidatorPubKey == nil {
 		return nil, errPubKeyIsNotSet
 	}
@@ -2211,6 +2212,7 @@ func (cs *State) signVote(
 	}
 
 	v := vote.ToProto()
+	cs.Logger.Debug("signING vote", "height", cs.Height, "round", cs.Round, "vote", vote)
 	err := cs.privValidator.SignVote(cs.state.ChainID, v)
 	vote.Signature = v.Signature
 	vote.Timestamp = v.Timestamp
@@ -2258,8 +2260,9 @@ func (cs *State) signAddVote(msgType cmtproto.SignedMsgType, hash []byte, header
 	// TODO: pass pubKey to signVote
 	vote, err := cs.signVote(msgType, hash, header)
 	if err == nil {
+		cs.Logger.Debug("signED vote", "height", cs.Height, "round", cs.Round, "vote", vote)
 		cs.sendInternalMessage(msgInfo{&VoteMessage{vote}, ""})
-		cs.Logger.Debug("signed and pushed vote", "height", cs.Height, "round", cs.Round, "vote", vote)
+		cs.Logger.Debug("pushed vote", "height", cs.Height, "round", cs.Round, "vote", vote)
 		return vote
 	}
 
