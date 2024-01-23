@@ -95,7 +95,7 @@ func stringEvts(evts []abci.Event) string {
 // If txID > 0, the event is attributed to the transaction with that
 // ID; otherwise it is recorded as a block event.
 func insertEvents(dbtx *sql.Tx, blockID, txID uint32, evts []abci.Event) error {
-	fmt.Printf("COMETDEBUG: %v -> %v", txID, stringEvts(evts))
+	fmt.Printf("COMETDEBUG: %v -> %v\n", txID, stringEvts(evts))
 	// Populate the transaction ID field iff one is defined (> 0).
 	var txIDArg interface{}
 	if txID > 0 {
@@ -194,7 +194,7 @@ func (es *EventSink) IndexTxEvents(txrs []*abci.TxResult) error {
 
 	for _, txr := range txrs {
 		txH := hex.EncodeToString(types.Tx(txr.Tx).Hash())
-		fmt.Printf("COMETDEBUG: blockHeight(%v) -> txHash(%v)", txr.Height, txH)
+		fmt.Printf("COMETDEBUG: blockHeight(%v) -> txHash(%v)\n", txr.Height, txH)
 		// Encode the result message in protobuf wire format for indexing.
 		resultData, err := proto.Marshal(txr)
 		if err != nil {
@@ -221,28 +221,28 @@ INSERT INTO `+tableTxResults+` (block_id, index, created_at, tx_hash, tx_result)
   ON CONFLICT DO NOTHING
   RETURNING rowid;
 `, blockID, txr.Index, ts, txHash, resultData)
-			fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> txId(%v)", txr.Height, txH, txID)
+			fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> txId(%v)\n", txr.Height, txH, txID)
 			if err == sql.ErrNoRows {
 				fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> duplicate transaction", txr.Height, txH)
 				return nil // we already saw this transaction; quietly succeed
 			} else if err != nil {
-				fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> error(%v)", txr.Height, txH, err)
+				fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> error(%v)\n", txr.Height, txH, err)
 				return fmt.Errorf("indexing tx_result: %w", err)
 			}
 
-			fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> txId(%v)", txr.Height, txH, txID)
+			fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> txId(%v)\n", txr.Height, txH, txID)
 			// Insert the special transaction meta-events for hash and height.
 			if err := insertEvents(dbtx, blockID, txID, []abci.Event{
 				makeIndexedEvent(types.TxHashKey, txHash),
 				makeIndexedEvent(types.TxHeightKey, fmt.Sprint(txr.Height)),
 			}); err != nil {
-				fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> insert native event error(%v)", txr.Height, txH, err)
+				fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> insert native event error(%v)\n", txr.Height, txH, err)
 				return fmt.Errorf("indexing transaction meta-events: %w", err)
 			}
-			fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> txId(%v)", txr.Height, txH, txID)
+			fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> txId(%v)\n", txr.Height, txH, txID)
 			// Index any events packaged with the transaction.
 			if err := insertEvents(dbtx, blockID, txID, txr.Result.Events); err != nil {
-				fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> insert custom event error(%v)", txr.Height, txH, err)
+				fmt.Printf("COMETDEBUG: blockHeight(%v) txHash(%v) -> insert custom event error(%v)\n", txr.Height, txH, err)
 				return fmt.Errorf("indexing transaction events: %w", err)
 			}
 			return nil
